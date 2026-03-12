@@ -1,12 +1,13 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { MessageCircle, X, Send, ArrowLeft, BookOpen, CreditCard, Phone, GraduationCap, ExternalLink, FileText, Users } from "lucide-react";
 import { useAppSettings } from "@/contexts/AppSettingsContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocation } from "react-router-dom";
-import { collection, getDocs, doc, getDoc } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Course } from "@/types";
 import ReactMarkdown from "react-markdown";
+import { getCached, setCache, CACHE_TTL } from "@/lib/firestoreCache";
 
 const WHATSAPP_ICON = (
   <svg viewBox="0 0 24 24" className="h-6 w-6 fill-current" xmlns="http://www.w3.org/2000/svg">
@@ -29,6 +30,30 @@ interface FloatingButtonsProps {
   course?: Course | null;
 }
 
+// Typing effect hook
+function useTypingEffect(text: string, speed: number = 20) {
+  const [displayed, setDisplayed] = useState("");
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    setDisplayed("");
+    setDone(false);
+    if (!text) { setDone(true); return; }
+    let i = 0;
+    const interval = setInterval(() => {
+      i++;
+      setDisplayed(text.slice(0, i));
+      if (i >= text.length) {
+        clearInterval(interval);
+        setDone(true);
+      }
+    }, speed);
+    return () => clearInterval(interval);
+  }, [text, speed]);
+
+  return { displayed, done };
+}
+
 export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
   const settings = useAppSettings();
   const { user, userDoc } = useAuth();
@@ -49,23 +74,51 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
   const [selectedEnrolledCourse, setSelectedEnrolledCourse] = useState<Course | null>(null);
   const [coursesLoaded, setCoursesLoaded] = useState(false);
 
-  // Chat messages
-  const [chatMessages, setChatMessages] = useState<{ role: "bot" | "user"; content: string; screen?: MenuScreen }[]>([
-    { role: "bot", content: "স্বাগতম! 👋 নিচের অপশন থেকে বেছে নিন অথবা আপনার প্রশ্ন লিখুন:" }
+  const WELCOME_TEXT = "Assalamualaikum everyone, This is Ashikuzzaman, Your Ashik Vaiya...";
+
+  // Chat messages with typing
+  const [chatMessages, setChatMessages] = useState<{ role: "bot" | "user"; content: string; screen?: MenuScreen; typing?: boolean }[]>([
+    { role: "bot", content: WELCOME_TEXT, typing: true }
   ]);
   const [chatInput, setChatInput] = useState("");
+  const [typingIndex, setTypingIndex] = useState<number>(0); // index of message being typed
+
+  // Track which message is currently typing
+  const currentTypingMsg = chatMessages.find((m, i) => m.typing && i === typingIndex);
+  const typingResult = useTypingEffect(currentTypingMsg?.content || "", 25);
+
+  useEffect(() => {
+    if (typingResult.done && currentTypingMsg) {
+      setChatMessages(prev => prev.map((m, i) => i === typingIndex ? { ...m, typing: false } : m));
+    }
+  }, [typingResult.done]);
+
+  const addBotMessage = useCallback((content: string, nav?: MenuScreen) => {
+    setChatMessages(prev => {
+      const newIdx = prev.length;
+      setTypingIndex(newIdx);
+      return [...prev, { role: "bot" as const, content, screen: nav, typing: true }];
+    });
+  }, []);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [screen, chatMessages]);
+  }, [screen, chatMessages, typingResult.displayed]);
 
-  // Load courses when chatbot opens
+  // Load courses when chatbot opens (with cache)
   useEffect(() => {
     if (chatOpen && !coursesLoaded) {
+      const cached = getCached<Course[]>("courses_all");
+      if (cached) {
+        setAllCourses(cached);
+        setCoursesLoaded(true);
+      }
       getDocs(collection(db, "courses")).then((snap) => {
-        setAllCourses(snap.docs.map(d => ({ id: d.id, ...d.data() } as Course)));
+        const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Course));
+        setAllCourses(list);
+        setCache("courses_all", list, CACHE_TTL.COURSES);
         setCoursesLoaded(true);
       });
     }
@@ -119,21 +172,20 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
     const matchedCourse = allCourses.find(c => lower.includes(c.courseName.toLowerCase()));
     if (matchedCourse) {
       setSelectedCourse(matchedCourse);
-      setChatMessages(prev => [...prev, { role: "bot", content: `📚 "${matchedCourse.courseName}" কোর্সের বিবরণ দেখুন:`, screen: "course-detail" }]);
+      addBotMessage(`📚 "${matchedCourse.courseName}" কোর্সের বিবরণ দেখুন:`, "course-detail");
       navigateTo("course-detail");
       return;
     }
 
     for (const kw of keywords) {
       if (kw.match.some(m => lower.includes(m))) {
-        setChatMessages(prev => [...prev, { role: "bot", content: kw.reply, screen: kw.nav }]);
+        addBotMessage(kw.reply, kw.nav);
         if (kw.nav) navigateTo(kw.nav);
         return;
       }
     }
 
-    // Default fallback
-    setChatMessages(prev => [...prev, { role: "bot", content: "দুঃখিত, আমি আপনার প্রশ্নটি বুঝতে পারিনি। 😅 নিচের অপশন থেকে বেছে নিন অথবা WhatsApp এ যোগাযোগ করুন।" }]);
+    addBotMessage("দুঃখিত, আমি আপনার প্রশ্নটি বুঝতে পারিনি। 😅 নিচের অপশন থেকে বেছে নিন অথবা WhatsApp এ যোগাযোগ করুন।");
   };
 
   // --- Capsule Button Component ---
@@ -201,35 +253,23 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
         const sc = selectedCourse;
         return (
           <div className="space-y-3 text-sm">
-            {sc.thumbnail && (
-              <img src={sc.thumbnail} alt="" className="w-full rounded-lg object-cover aspect-video" />
-            )}
+            {sc.thumbnail && <img src={sc.thumbnail} alt="" className="w-full rounded-lg object-cover aspect-video" />}
             <div className="font-semibold text-base">{sc.courseName}</div>
             <div className="text-primary font-bold text-lg">৳{sc.price}</div>
-
             {sc.overview?.length > 0 && (
               <div>
                 <div className="font-medium mb-1">📖 ওভারভিউ:</div>
-                <ul className="space-y-1 text-muted-foreground">
-                  {sc.overview.map((o, i) => <li key={i}>• {o}</li>)}
-                </ul>
+                <ul className="space-y-1 text-muted-foreground">{sc.overview.map((o, i) => <li key={i}>• {o}</li>)}</ul>
               </div>
             )}
-
             {sc.subjects?.length > 0 && (
               <div>
                 <div className="font-medium mb-1">📚 সাবজেক্টসমূহ:</div>
                 <ul className="space-y-1 text-muted-foreground">
-                  {sc.subjects.map(s => (
-                    <li key={s.subjectId}>
-                      • {s.subjectName}
-                      {s.chapters?.length ? ` (${s.chapters.length}টি চ্যাপ্টার)` : ""}
-                    </li>
-                  ))}
+                  {sc.subjects.map(s => <li key={s.subjectId}>• {s.subjectName}{s.chapters?.length ? ` (${s.chapters.length}টি চ্যাপ্টার)` : ""}</li>)}
                 </ul>
               </div>
             )}
-
             {sc.instructors?.length > 0 && (
               <div>
                 <div className="font-medium mb-1">👨‍🏫 ইন্সট্রাক্টর:</div>
@@ -246,22 +286,13 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
                 </div>
               </div>
             )}
-
             {sc.routinePDF && (
-              <a href={sc.routinePDF} target="_blank" rel="noopener noreferrer"
-                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
-                <FileText className="h-4 w-4" />
-                <span>📅 রুটিন PDF দেখুন</span>
+              <a href={sc.routinePDF} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
+                <FileText className="h-4 w-4" /><span>📅 রুটিন PDF দেখুন</span>
               </a>
             )}
-
             <div className="pt-1">
-              <CapsuleButton
-                icon={<CreditCard className="h-3.5 w-3.5" />}
-                label="এই কোর্সে এনরোল করুন"
-                onClick={() => navigateTo("enrollment-guide")}
-                accent
-              />
+              <CapsuleButton icon={<CreditCard className="h-3.5 w-3.5" />} label="এই কোর্সে এনরোল করুন" onClick={() => navigateTo("enrollment-guide")} accent />
             </div>
           </div>
         );
@@ -278,23 +309,18 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
               <div className="flex gap-2"><span className="font-bold text-foreground">5️⃣</span> ট্রানজ্যাকশন আইডি ও পেমেন্ট স্ক্রিনশট আপলোড করুন</div>
               <div className="flex gap-2"><span className="font-bold text-foreground">6️⃣</span> অ্যাডমিন ভেরিফাই করলেই কোর্স অ্যাক্সেস পাবেন!</div>
             </div>
-
             {settings.paymentMethods?.length > 0 && (
               <div className="pt-2">
                 <div className="font-medium mb-2">💳 পেমেন্ট নাম্বারসমূহ:</div>
                 <div className="space-y-2">
                   {settings.paymentMethods.map((pm, i) => (
                     <div key={i} className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-muted/60">
-                      <div>
-                        <div className="font-medium">{pm.name}</div>
-                        <div className="text-xs text-muted-foreground font-mono">{pm.number}</div>
-                      </div>
+                      <div><div className="font-medium">{pm.name}</div><div className="text-xs text-muted-foreground font-mono">{pm.number}</div></div>
                     </div>
                   ))}
                 </div>
               </div>
             )}
-
             <div className="text-xs text-muted-foreground bg-warning/10 text-warning border border-warning/20 rounded-lg px-3 py-2">
               ⏳ পেমেন্ট ভেরিফিকেশনে কিছু সময় লাগতে পারে। সমস্যা হলে WhatsApp এ যোগাযোগ করুন।
             </div>
@@ -337,15 +363,8 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
                   const isTg = sl.name.toLowerCase().includes("telegram");
                   const emoji = isWa ? "💬" : isFb ? "📘" : isYt ? "🎬" : isTg ? "✈️" : "🔗";
                   return (
-                    <a
-                      key={i}
-                      href={sl.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors"
-                    >
-                      <span>{emoji}</span>
-                      <span className="flex-1">{sl.name}</span>
+                    <a key={i} href={sl.link} target="_blank" rel="noopener noreferrer" className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
+                      <span>{emoji}</span><span className="flex-1">{sl.name}</span>
                       <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
                     </a>
                   );
@@ -354,10 +373,8 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
             ) : (
               <div className="text-muted-foreground text-center py-4">যোগাযোগের তথ্য এখনও আপডেট করা হয়নি</div>
             )}
-
             {settings.youtubeChannel && (
-              <a href={settings.youtubeChannel} target="_blank" rel="noopener noreferrer"
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
+              <a href={settings.youtubeChannel} target="_blank" rel="noopener noreferrer" className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
                 <span>🎬</span><span className="flex-1">YouTube Channel</span>
                 <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
               </a>
@@ -372,15 +389,8 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
             {settings.usefulLinks?.length > 0 ? (
               <div className="space-y-2">
                 {settings.usefulLinks.map((ul, i) => (
-                  <a
-                    key={i}
-                    href={ul.link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors"
-                  >
-                    <ExternalLink className="h-4 w-4 shrink-0" />
-                    <span className="flex-1">{ul.name}</span>
+                  <a key={i} href={ul.link} target="_blank" rel="noopener noreferrer" className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
+                    <ExternalLink className="h-4 w-4 shrink-0" /><span className="flex-1">{ul.name}</span>
                   </a>
                 ))}
               </div>
@@ -398,17 +408,10 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
               <div className="text-sm text-muted-foreground text-center py-4">কোর্স লোড হচ্ছে...</div>
             ) : (
               enrolledCoursesList.map(c => (
-                <button
-                  key={c.id}
-                  onClick={() => { setSelectedEnrolledCourse(c); navigateTo("my-course-detail"); }}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors text-left"
-                >
-                  {c.thumbnail && (
-                    <img src={c.thumbnail} alt="" className="w-10 h-10 rounded object-cover shrink-0" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium truncate">{c.courseName}</div>
-                  </div>
+                <button key={c.id} onClick={() => { setSelectedEnrolledCourse(c); navigateTo("my-course-detail"); }}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors text-left">
+                  {c.thumbnail && <img src={c.thumbnail} alt="" className="w-10 h-10 rounded object-cover shrink-0" />}
+                  <div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{c.courseName}</div></div>
                 </button>
               ))
             )}
@@ -421,57 +424,37 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
         return (
           <div className="space-y-3 text-sm">
             <div className="font-semibold text-base">🎓 {ec.courseName}</div>
-
             {ec.discussionGroups?.length > 0 && (
               <div>
                 <div className="font-medium mb-2">💬 ডিসকাশন গ্রুপ:</div>
                 <div className="space-y-2">
                   {ec.discussionGroups.map((g, i) => (
-                    <a
-                      key={i}
-                      href={g.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors"
-                    >
-                      <Users className="h-4 w-4 shrink-0" />
-                      <span className="flex-1">{g.name}</span>
+                    <a key={i} href={g.link} target="_blank" rel="noopener noreferrer" className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
+                      <Users className="h-4 w-4 shrink-0" /><span className="flex-1">{g.name}</span>
                       <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
                     </a>
                   ))}
                 </div>
               </div>
             )}
-
             {ec.allMaterialsLink && (
-              <a href={ec.allMaterialsLink} target="_blank" rel="noopener noreferrer"
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
-                <FileText className="h-4 w-4 shrink-0" />
-                <span className="flex-1">📁 সকল ম্যাটেরিয়াল</span>
+              <a href={ec.allMaterialsLink} target="_blank" rel="noopener noreferrer" className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
+                <FileText className="h-4 w-4 shrink-0" /><span className="flex-1">📁 সকল ম্যাটেরিয়াল</span>
                 <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
               </a>
             )}
-
             {ec.routinePDF && (
-              <a href={ec.routinePDF} target="_blank" rel="noopener noreferrer"
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
-                <FileText className="h-4 w-4 shrink-0" />
-                <span className="flex-1">📅 রুটিন PDF</span>
+              <a href={ec.routinePDF} target="_blank" rel="noopener noreferrer" className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-muted/60 hover:bg-accent transition-colors">
+                <FileText className="h-4 w-4 shrink-0" /><span className="flex-1">📅 রুটিন PDF</span>
                 <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
               </a>
             )}
-
             {ec.subjects?.length > 0 && (
               <div>
                 <div className="font-medium mb-1">📚 সাবজেক্ট:</div>
-                <ul className="space-y-1 text-muted-foreground">
-                  {ec.subjects.map(s => (
-                    <li key={s.subjectId}>• {s.subjectName}</li>
-                  ))}
-                </ul>
+                <ul className="space-y-1 text-muted-foreground">{ec.subjects.map(s => <li key={s.subjectId}>• {s.subjectName}</li>)}</ul>
               </div>
             )}
-
             {ec.instructors?.length > 0 && (
               <div>
                 <div className="font-medium mb-1">👨‍🏫 ইন্সট্রাক্টর:</div>
@@ -485,9 +468,7 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
                 </div>
               </div>
             )}
-
-            <a href={`/my-courses/${ec.id}`}
-              className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-colors">
+            <a href={`/my-courses/${ec.id}`} className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-colors">
               <BookOpen className="h-4 w-4" /> কোর্সে যান
             </a>
           </div>
@@ -533,22 +514,25 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
       {/* Menu-based Chatbot */}
       {chatOpen && (
         <div className="w-[calc(100vw-1.5rem)] max-w-96 h-[30rem] bg-card border border-border rounded-xl shadow-lg flex flex-col overflow-hidden animate-fade-in">
-          {/* Header */}
-          <div className="p-3 bg-primary text-primary-foreground flex items-center gap-2 rounded-t-xl shrink-0">
+          {/* Header with Logo + Name */}
+          <div className="p-3 bg-primary text-primary-foreground flex items-center gap-2.5 rounded-t-xl shrink-0">
             {screen !== "main" && (
               <button onClick={goBack} className="p-0.5 hover:bg-primary-foreground/10 rounded">
                 <ArrowLeft className="h-4 w-4" />
               </button>
             )}
+            {screen === "main" && settings.appLogo && (
+              <img src={settings.appLogo} alt="" className="w-7 h-7 rounded-full object-cover border border-primary-foreground/20" />
+            )}
             <span className="text-sm font-medium flex-1 truncate">
-              {screenTitle[screen]}
+              {screen === "main" ? (settings.appName || "Darpan Academy") : screenTitle[screen]}
             </span>
             <button onClick={closeAll}><X className="h-4 w-4" /></button>
           </div>
 
           {/* Content */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3">
-            {/* Chat messages */}
+            {/* Chat messages with typing effect */}
             {chatMessages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
@@ -556,7 +540,14 @@ export function FloatingButtons({ course }: FloatingButtonsProps = {}) {
                     ? "bg-primary text-primary-foreground rounded-br-md"
                     : "bg-muted text-foreground rounded-bl-md"
                 }`}>
-                  {msg.content}
+                  {msg.role === "bot" && msg.typing && i === typingIndex ? (
+                    <>
+                      {typingResult.displayed}
+                      <span className="inline-block w-1 h-4 bg-foreground/50 ml-0.5 animate-pulse align-middle" />
+                    </>
+                  ) : (
+                    msg.content
+                  )}
                 </div>
               </div>
             ))}
