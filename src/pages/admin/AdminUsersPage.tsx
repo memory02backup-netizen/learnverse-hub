@@ -332,7 +332,7 @@ export default function AdminUsersPage() {
         {filtered.length === 0 && (
           <div className="text-center py-8 text-muted-foreground text-sm">No students found</div>
         )}
-        {filtered.map((u) => {
+        {paginatedUsers.map((u) => {
           const pendingCount = getUserRequests(u.id).filter(r => r.status === "pending").length;
           return (
             <button key={u.id} onClick={() => setSelectedUser(u)} className="w-full text-left p-3 bg-card rounded-xl border border-border flex items-center gap-3 hover:bg-accent/50 transition-colors">
@@ -364,6 +364,29 @@ export default function AdminUsersPage() {
           );
         })}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-4">
+          <button
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="px-3 py-1.5 rounded-lg bg-card border border-border text-foreground text-xs font-medium disabled:opacity-30"
+          >
+            Previous
+          </button>
+          <span className="text-xs text-muted-foreground">
+            {currentPage} / {totalPages}
+          </span>
+          <button
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+            className="px-3 py-1.5 rounded-lg bg-card border border-border text-foreground text-xs font-medium disabled:opacity-30"
+          >
+            Next
+          </button>
+        </div>
+      )}
     </div>
   );
 }
