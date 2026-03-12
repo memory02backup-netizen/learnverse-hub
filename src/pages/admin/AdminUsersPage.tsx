@@ -94,6 +94,9 @@ export default function AdminUsersPage() {
     fetchData();
   };
 
+  const ITEMS_PER_PAGE = 20;
+  const [currentPage, setCurrentPage] = useState(1);
+
   const filtered = users.filter((u) => {
     if (u.role === "admin") return false;
     const matchesSearch =
@@ -108,6 +111,9 @@ export default function AdminUsersPage() {
     return matchesSearch && matchesStatus && matchesCourse;
   });
 
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  const paginatedUsers = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
   const students = users.filter(u => u.role !== "admin");
   const statusCounts = {
     all: students.length,
@@ -115,6 +121,9 @@ export default function AdminUsersPage() {
     approved: students.filter(u => u.status === "approved").length,
     rejected: students.filter(u => getUserRequests(u.id).some(r => r.status === "rejected")).length,
   };
+
+  // Reset page when filters change
+  useEffect(() => { setCurrentPage(1); }, [search, statusFilter, courseFilter]);
 
   if (loading) return <AdminListSkeleton count={6} />;
 
