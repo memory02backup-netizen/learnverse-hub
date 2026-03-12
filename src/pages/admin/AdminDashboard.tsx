@@ -5,11 +5,15 @@ import { useAppSettings } from "@/contexts/AppSettingsContext";
 import { Link } from "react-router-dom";
 import { Users, Clock, BookOpen, Video, Youtube, HardDrive, FileText } from "lucide-react";
 import { AdminDashboardSkeleton } from "@/components/skeletons/AdminSkeleton";
+import { getCached, setCache, CACHE_TTL } from "@/lib/firestoreCache";
+
+interface DashStats { users: number; pending: number; courses: number; videos: number; exams: number; }
+const CACHE_KEY = "admin_dashboard_stats";
 
 export default function AdminDashboard() {
   const settings = useAppSettings();
-  const [stats, setStats] = useState({ users: 0, pending: 0, courses: 0, videos: 0, exams: 0 });
-  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<DashStats>(() => getCached<DashStats>(CACHE_KEY) || { users: 0, pending: 0, courses: 0, videos: 0, exams: 0 });
+  const [loading, setLoading] = useState(!getCached<DashStats>(CACHE_KEY));
 
   useEffect(() => {
     const fetch = async () => {
@@ -28,13 +32,15 @@ export default function AdminDashboard() {
       const pendingRequestUserIds = new Set(enrollRequestsSnap.docs.map(d => d.data().userId));
       const approvedWithPending = allUsers.filter((u: any) => u.role === "student" && u.status !== "pending" && pendingRequestUserIds.has(u.id));
       const pendingCount = pendingUsers.length + approvedWithPending.length;
-      setStats({
+      const newStats = {
         users: usersSnap.size,
         pending: pendingCount,
         courses: coursesSnap.size,
         videos: videosSnap.size,
         exams: examsSnap.size,
-      });
+      };
+      setStats(newStats);
+      setCache(CACHE_KEY, newStats, CACHE_TTL.DASHBOARD);
       setLoading(false);
     };
     fetch();
@@ -55,11 +61,7 @@ export default function AdminDashboard() {
       <h2 className="text-xl font-semibold text-foreground mb-4">Dashboard</h2>
       <div className="grid grid-cols-2 gap-3">
         {cards.map((card) => (
-          <Link
-            key={card.label}
-            to={card.to}
-            className="p-4 bg-card rounded-lg border border-border shadow-card"
-          >
+          <Link key={card.label} to={card.to} className="p-4 bg-card rounded-lg border border-border shadow-card">
             <card.icon className="h-6 w-6 text-muted-foreground mb-2" />
             <p className="text-2xl font-semibold text-foreground">{card.value}</p>
             <p className="text-sm text-muted-foreground">{card.label}</p>
@@ -69,24 +71,14 @@ export default function AdminDashboard() {
 
       <div className="grid grid-cols-2 gap-3 mt-4">
         {settings.youtubeChannel && (
-          <a
-            href={settings.youtubeChannel}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-4 bg-card rounded-lg border border-border shadow-card"
-          >
+          <a href={settings.youtubeChannel} target="_blank" rel="noopener noreferrer" className="p-4 bg-card rounded-lg border border-border shadow-card">
             <Youtube className="h-6 w-6 text-destructive mb-2" />
             <p className="text-sm font-medium text-foreground">YouTube</p>
             <p className="text-xs text-muted-foreground mt-1">Open in new tab</p>
           </a>
         )}
         {settings.googleDrive && (
-          <a
-            href={settings.googleDrive}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-4 bg-card rounded-lg border border-border shadow-card"
-          >
+          <a href={settings.googleDrive} target="_blank" rel="noopener noreferrer" className="p-4 bg-card rounded-lg border border-border shadow-card">
             <HardDrive className="h-6 w-6 text-muted-foreground mb-2" />
             <p className="text-sm font-medium text-foreground">Google Drive</p>
             <p className="text-xs text-muted-foreground mt-1">Open in new tab</p>

@@ -5,10 +5,13 @@ import { Course } from "@/types";
 import { Link } from "react-router-dom";
 import { FloatingButtons } from "@/components/FloatingButtons";
 import { CourseGridSkeleton } from "@/components/skeletons/CourseCardSkeleton";
+import { getCached, setCache, CACHE_TTL } from "@/lib/firestoreCache";
+
+const CACHE_KEY = "courses_all";
 
 export default function HomePage() {
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [courses, setCourses] = useState<Course[]>(() => getCached<Course[]>(CACHE_KEY) || []);
+  const [loading, setLoading] = useState(!getCached<Course[]>(CACHE_KEY));
 
   useEffect(() => {
     const fetch = async () => {
@@ -16,6 +19,7 @@ export default function HomePage() {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Course));
       list.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
       setCourses(list);
+      setCache(CACHE_KEY, list, CACHE_TTL.COURSES);
       setLoading(false);
     };
     fetch();

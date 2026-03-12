@@ -8,6 +8,7 @@ import { useAppSettings } from "@/contexts/AppSettingsContext";
 import { VideoGridSkeleton } from "@/components/skeletons/VideoCardSkeleton";
 import { FloatingButtons } from "@/components/FloatingButtons";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getCached, setCache, CACHE_TTL } from "@/lib/firestoreCache";
 
 export default function MyCoursesPage() {
   const { user, userDoc } = useAuth();
@@ -31,12 +32,25 @@ export default function MyCoursesPage() {
     const courseId = userDoc.activeCourseId;
     if (!courseId) { setLoading(false); return; }
 
+    const cacheKey = `videos_${courseId}`;
+    const courseKey = `course_${courseId}`;
+
+    // Try cache first
+    const cachedVideos = getCached<Video[]>(cacheKey);
+    const cachedCourse = getCached<Course>(courseKey);
+    if (cachedVideos && cachedCourse) {
+      setVideos(cachedVideos);
+      setAllSubjects(cachedCourse.subjects || []);
+      setLoading(false);
+    }
+
     const fetchData = async () => {
       try {
         const courseSnap = await getDoc(doc(db, "courses", courseId));
         if (courseSnap.exists()) {
           const course = { id: courseSnap.id, ...courseSnap.data() } as Course;
           setAllSubjects(course.subjects || []);
+          setCache(courseKey, course, CACHE_TTL.COURSES);
         }
 
         const q = query(collection(db, "videos"), where("courseId", "==", courseId));
@@ -44,6 +58,7 @@ export default function MyCoursesPage() {
         const vids = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Video));
         vids.sort((a, b) => (a.order || 0) - (b.order || 0));
         setVideos(vids);
+        setCache(cacheKey, vids, CACHE_TTL.VIDEOS);
       } catch (err) {
         console.error("Error fetching videos:", err);
       }
@@ -85,11 +100,9 @@ export default function MyCoursesPage() {
     );
   }
 
-  // Get chapters for the selected subject
   const selectedSubjectObj = allSubjects.find(s => s.subjectName === activeSubject);
   const chapters = selectedSubjectObj?.chapters || [];
 
-  // Filter videos
   let filtered = activeSubject === "All" ? videos : videos.filter((v) => v.subjectName === activeSubject);
   if (activeChapter !== "All" && activeSubject !== "All") {
     filtered = filtered.filter((v) => v.chapterName === activeChapter);
@@ -117,7 +130,6 @@ export default function MyCoursesPage() {
           ))}
         </div>
 
-        {/* Chapter Chips - show only when a specific subject is selected and has chapters */}
         {activeSubject !== "All" && chapters.length > 0 && (
           <div className="flex gap-2 overflow-x-auto scrollbar-hide">
             <button

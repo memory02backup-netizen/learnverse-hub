@@ -6,24 +6,27 @@ import { Exam } from "@/types/exam";
 import { Link } from "react-router-dom";
 import { Clock, CheckCircle, AlertCircle, BookOpen } from "lucide-react";
 import { FloatingButtons } from "@/components/FloatingButtons";
+import { getCached, setCache, CACHE_TTL } from "@/lib/firestoreCache";
 
 export default function ExamListPage() {
   const { userDoc } = useAuth();
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [loading, setLoading] = useState(true);
+  const courseId = userDoc?.activeCourseId;
+  const cacheKey = `exams_${courseId}`;
+  const [exams, setExams] = useState<Exam[]>(() => (courseId ? getCached<Exam[]>(cacheKey) : null) || []);
+  const [loading, setLoading] = useState(!getCached<Exam[]>(cacheKey));
 
   useEffect(() => {
-    if (!userDoc?.activeCourseId) return;
+    if (!courseId) return;
     const fetchExams = async () => {
-      setLoading(true);
-      const snap = await getDocs(query(collection(examDb, "exams"), where("courseId", "==", userDoc.activeCourseId)));
+      const snap = await getDocs(query(collection(examDb, "exams"), where("courseId", "==", courseId)));
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as Exam));
       list.sort((a, b) => (b.startTime?.toMillis?.() || 0) - (a.startTime?.toMillis?.() || 0));
       setExams(list);
+      setCache(cacheKey, list, CACHE_TTL.EXAMS);
       setLoading(false);
     };
     fetchExams();
-  }, [userDoc?.activeCourseId]);
+  }, [courseId]);
 
   const now = Date.now();
 
@@ -35,7 +38,7 @@ export default function ExamListPage() {
     return "ended";
   };
 
-  if (!userDoc?.activeCourseId) {
+  if (!courseId) {
     return (
       <div className="p-4 text-center">
         <p className="text-muted-foreground text-sm py-8">Please select an active course from your profile to view exams.</p>

@@ -94,6 +94,9 @@ export default function AdminUsersPage() {
     fetchData();
   };
 
+  const ITEMS_PER_PAGE = 20;
+  const [currentPage, setCurrentPage] = useState(1);
+
   const filtered = users.filter((u) => {
     if (u.role === "admin") return false;
     const matchesSearch =
@@ -108,6 +111,9 @@ export default function AdminUsersPage() {
     return matchesSearch && matchesStatus && matchesCourse;
   });
 
+  const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+  const paginatedUsers = filtered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
   const students = users.filter(u => u.role !== "admin");
   const statusCounts = {
     all: students.length,
@@ -115,6 +121,9 @@ export default function AdminUsersPage() {
     approved: students.filter(u => u.status === "approved").length,
     rejected: students.filter(u => getUserRequests(u.id).some(r => r.status === "rejected")).length,
   };
+
+  // Reset page when filters change
+  useEffect(() => { setCurrentPage(1); }, [search, statusFilter, courseFilter]);
 
   if (loading) return <AdminListSkeleton count={6} />;
 
@@ -323,7 +332,7 @@ export default function AdminUsersPage() {
         {filtered.length === 0 && (
           <div className="text-center py-8 text-muted-foreground text-sm">No students found</div>
         )}
-        {filtered.map((u) => {
+        {paginatedUsers.map((u) => {
           const pendingCount = getUserRequests(u.id).filter(r => r.status === "pending").length;
           return (
             <button key={u.id} onClick={() => setSelectedUser(u)} className="w-full text-left p-3 bg-card rounded-xl border border-border flex items-center gap-3 hover:bg-accent/50 transition-colors">
@@ -355,6 +364,29 @@ export default function AdminUsersPage() {
           );
         })}
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 mt-4">
+          <button
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            className="px-3 py-1.5 rounded-lg bg-card border border-border text-foreground text-xs font-medium disabled:opacity-30"
+          >
+            Previous
+          </button>
+          <span className="text-xs text-muted-foreground">
+            {currentPage} / {totalPages}
+          </span>
+          <button
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+            className="px-3 py-1.5 rounded-lg bg-card border border-border text-foreground text-xs font-medium disabled:opacity-30"
+          >
+            Next
+          </button>
+        </div>
+      )}
     </div>
   );
 }
